@@ -1,0 +1,146 @@
+---
+- name: VPC
+  hosts: localhost
+  connection: local
+  vars:
+    profile: pythonAutomation #Change the profile name as per profile in your aws credentials file
+    region: us-east-1
+    vpc_cidr: 10.0.0.0/16
+  tasks:
+    - name: Create VPC
+      ec2_vpc_net:
+        name: rakesh-test-vpc2
+        cidr_block: 10.0.0.0/16
+        region: "{{ region }}"
+        tags:
+          module: ec2_vpc_vnet
+      register: vpc
+
+    - name: Get VPC ID
+      set_fact:
+        vpc_id: "{{ vpc.vpc.id }}"
+
+    - name: Get Subnet CIDRs
+      set_fact:
+        vpc_subnets:
+          internet1:
+            az: "{{ region }}a"
+            cidr: "{{ vpc_cidr | ansible.netcommon.ipsubnet(28, 0) }}"
+          internet2:
+            az: "{{ region }}b"
+            cidr: "{{ vpc_cidr | ansible.netcommon.ipsubnet(28, 1) }}"
+          private1:
+            az: "{{ region }}a"
+            cidr: "{{ vpc_cidr | ansible.netcommon.ipsubnet(28, 2) }}"
+          private2:
+            az: "{{ region }}b"
+            cidr: "{{ vpc_cidr | ansible.netcommon.ipsubnet(28, 3) }}"
+
+    - name: Create IGW
+      ec2_vpc_igw:
+        vpc_id: "{{ vpc_id }}"
+        state: present
+      register: igw
+
+    - name: Create Subnets
+      ec2_vpc_subnet:
+        vpc_id: "{{ vpc.vpc.id }}"
+        az: "{{ item.value.az }}"
+        cidr: "{{ item.value.cidr }}"
+        tags:
+          Name: "{{ item.key }}"
+      with_dict:  "{{ vpc_subnets }}"
+      register: vpc_subnets
+
+    - name: set vpc subnet ids
+      set_fact:
+        vpc_subnet_ids: "{{ vpc_subnet_ids | default({}) | combine({ item.subnet.tags.Name: item.subnet.id }) }}"
+      loop: "{{ vpc_subnets.results }}"
+
+    - name: Create NAT GW
+      ec2_vpc_nat_gateway:
+        subnet_id: "{{vpc_subnet_ids['internet1']}}"
+        region: "{{ region }}"
+        wait: yes
+        if_exist_do_not_create: true
+      register: nat_gw
+
+    - name: set Gateways facts
+      set_fact:
+        vpc_gateway_id: "{{ igw.gateway_id }}"
+        vpc_nat_gateway_id: "{{ nat_gw.nat_gateway_id }}"
+        vpc_nat_gateway_ip: "{{ nat_gw.nat_gateway_addresses[0].public_ip }}"
+
+    - name: Tag Nat GW
+      ec2_tag:
+        resource: "{{ nat_gw.nat_gateway_id }}"
+        tags:
+          Name: "NATGW-{{ region }}"
+
+    - name: Local route table
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc_id }}"
+        tags:
+          Name: local
+      register: local
+
+    - name: Private route table
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc_id }}"
+        tags:
+          Name: Private
+        subnets:
+          - "{{ vpc_subnet_ids['private1'] }}"
+          - "{{ vpc_subnet_ids['private2'] }}"
+        routes:
+          - dest: "0.0.0.0/0"
+            gateway_id: "{{ vpc_nat_gateway_id }}"
+      register: private
+
+    - name: Internet route table
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc_id }}"
+        tags:
+          Name: Internet
+        subnets:
+          - "{{ vpc_subnet_ids['internet1'] }}"
+          - "{{ vpc_subnet_ids['internet2'] }}"
+        routes:
+          - dest: "0.0.0.0/0"
+            gateway_id: "{{ vpc_gateway_id }}"            
+      register: internet
+
+    - set_fact:
+        rt_internet_id: "{{internet.route_table.id }}"   
+
+    - name: nacl
+      ec2_vpc_nacl:
+        vpc_id: "{{ vpc_id }}"
+        name: nacl
+        tags:
+          Name: nacl
+        subnets:
+          - "{{ vpc_subnet_ids['internet1'] }}"
+          - "{{ vpc_subnet_ids['internet2'] }}"
+        ingress: [
+          [100, 'tcp', 'allow', "{{ vpc_cidr }}", null, null, 22, 22]        
+          ]
+      register: nacl
+
+    - name: s3-endpoint
+      ec2_vpc_endpoint:
+        vpc_id: "{{ vpc_id }}"
+        service: com.amazonaws.{{ region }}.s3
+        route_table_ids:
+          - "{{ internet.route_table.id }}"
+          - "{{ local.route_table.id }}"
+          - "{{ private.route_table.id }}"
+
+
+
+
+
+      
+
+
+
