@@ -1,3 +1,5 @@
+##Install terraform, then run terraform init, terraform plan, verify everything in plan,
+## then terraform apply....once done..Terraform destroy to destroy the resources in aws.
 #--------Provider---------------#
 
 provider "aws" {
