@@ -1,4 +1,6 @@
 ---
+## Install ansible and run command 'ansible-playbook vpc3.yml', it is written in yaml
+## to create infra for a vpc in aws
 - name: VPC
   hosts: localhost
   connection: local
